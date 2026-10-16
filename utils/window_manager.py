@@ -3,23 +3,31 @@ import sys
 import os
 
 def abrir_ventana(root, script_path):
-    """
-    Abre un subproceso ocultando la ventana actual
-    y la vuelve a mostrar cuando se cierra.
-    """
-
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    # subir un nivel (porque estás en /utils)
-    base_path = os.path.dirname(base_path)
-
+    """Abre una ventana con acceso a los módulos del proyecto."""
+    base_path = os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))
+    )
     ruta = os.path.join(base_path, script_path)
+
+    entorno = os.environ.copy()
+    pythonpath_actual = entorno.get("PYTHONPATH", "")
+    entorno["PYTHONPATH"] = (
+        base_path + os.pathsep + pythonpath_actual
+        if pythonpath_actual
+        else base_path
+    )
 
     root.withdraw()
 
-    proceso = subprocess.Popen([sys.executable, ruta])
-    proceso.wait()
-
-    root.deiconify()
+    try:
+        proceso = subprocess.Popen(
+            [sys.executable, ruta],
+            cwd=base_path,
+            env=entorno,
+        )
+        proceso.wait()
+    finally:
+        root.deiconify()
 
 def sort_column(treeview, col, reverse):
     # 1. Extraer los datos de la columna junto con el ID de la fila
