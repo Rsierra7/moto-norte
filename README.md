@@ -158,10 +158,16 @@ La impresión requiere una impresora configurada en Windows.
 
 ## Estado
 
+## Estado
+
 Proyecto en desarrollo.
 
-La apertura de Inventario, Ventas y Reporte Ventas se verificó en
-el equipo de desarrollo con una base de datos existente.
+Verificaciones realizadas en Windows con Python 3.13 y MySQL 9.3:
 
-La instalación desde cero en un entorno virtual y la importación
-de los archivos SQL aún deben verificarse.
+- Instalación de dependencias en un entorno virtual nuevo.
+- Importación de los cuatro archivos SQL en una base vacía.
+- Apertura de Inventario, Ventas y Reporte Ventas con la base vacía.
+- Apertura de las mismas ventanas con datos existentes.
+
+Pendiente: verificar el registro de ventas, la actualización del
+inventario y la generación e impresión de facturas.
