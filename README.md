@@ -158,8 +158,6 @@ La impresión requiere una impresora configurada en Windows.
 
 ## Estado
 
-## Estado
-
 Proyecto en desarrollo.
 
 Verificaciones realizadas en Windows con Python 3.13 y MySQL 9.3:
