@@ -1,68 +1,104 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+from mysql.connector import Error
+from db import DatabaseConnectionError
 from services import inventario_service as service
-from utils.window_manager import *
+from utils.window_manager import abrir_ventana, center_window, sort_column
+
+
+def show_database_error(exc):
+    if isinstance(exc, DatabaseConnectionError):
+        message = str(exc)
+    elif exc.errno == 1062:
+        message = "Ya existe un producto con ese código."
+    elif exc.errno in (1451, 1452):
+        message = "La operación no se puede completar porque existen registros relacionados."
+    else:
+        message = "No se pudo completar la operación en MySQL. Revisa la conexión y la estructura de la base."
+    messagebox.showerror("Error de base de datos", message, parent=root)
+
+
+def replace_rows(rows):
+    table.delete(*table.get_children())
+    for row in rows:
+        table.insert("", tk.END, values=row)
+
 
 def load_inventory():
-    table.delete(*table.get_children())
-    for row in service.fetch_inventory():
-        table.insert("", tk.END, values=row)
+    try:
+        rows = service.fetch_inventory()
+    except Error as exc:
+        show_database_error(exc)
+        return False
+    replace_rows(rows)
+    return True
+
+
+def refresh_after_write():
+    clear_fields()
+    if not load_inventory():
+        messagebox.showwarning(
+            "Actualizar inventario",
+            "El cambio se guardó, pero no se pudo actualizar la tabla. "
+            "No repitas la operación; pulsa Buscar para volver a consultar.",
+            parent=root,
+        )
+
 
 def add_product():
     try:
-        service.add_product(
-            entry_cod.get(),
-            entry_prod.get(),
-            entry_ubic.get(),
-            float(entry_precio.get()),
-            int(entry_cant.get())
-        )
-        load_inventory()
-        clear_fields()
-    except:
-        messagebox.showerror("Error", "Datos inválidos")
+        precio = float(entry_precio.get())
+        cantidad = int(entry_cant.get())
+    except ValueError:
+        messagebox.showerror("Error", "Precio o cantidad inválidos", parent=root)
+        return
+    try:
+        service.add_product(entry_cod.get(), entry_prod.get(), entry_ubic.get(), precio, cantidad)
+    except Error as exc:
+        show_database_error(exc)
+        return
+    refresh_after_write()
+
 
 def update_product():
     selected = table.selection()
     if not selected:
-        messagebox.showwarning("Advertencia", "Seleccione un producto")
+        messagebox.showwarning("Advertencia", "Seleccione un producto", parent=root)
         return
-
     cod = table.item(selected[0])["values"][0]
-
     try:
-        service.update_product(
-            cod,
-            entry_prod.get(),
-            entry_ubic.get(),
-            float(entry_precio.get()),
-            int(entry_cant.get())
-        )
-        load_inventory()
-        clear_fields()
-    except:
-        messagebox.showerror("Error", "Datos inválidos")
+        precio = float(entry_precio.get())
+        cantidad = int(entry_cant.get())
+    except ValueError:
+        messagebox.showerror("Error", "Precio o cantidad inválidos", parent=root)
+        return
+    try:
+        service.update_product(cod, entry_prod.get(), entry_ubic.get(), precio, cantidad)
+    except Error as exc:
+        show_database_error(exc)
+        return
+    refresh_after_write()
+
 
 def delete_product():
     selected = table.selection()
     if not selected:
-        messagebox.showwarning("Advertencia", "Seleccione un producto para eliminar.")
+        messagebox.showwarning("Advertencia", "Seleccione un producto para eliminar.", parent=root)
         return
-
-    # Obtenemos el código de la primera columna
     cod = table.item(selected[0])["values"][0]
+    if not messagebox.askyesno("Confirmar", f"¿Eliminar el producto con código {cod}?", parent=root):
+        return
+    try:
+        deleted = service.delete_product_db(cod)
+    except Error as exc:
+        show_database_error(exc)
+        return
+    if deleted:
+        messagebox.showinfo("Éxito", "Producto eliminado correctamente.", parent=root)
+    else:
+        messagebox.showwarning("Advertencia", "El producto ya no existe.", parent=root)
+    refresh_after_write()
 
-    confirm = messagebox.askyesno("Confirmar", f"¿Eliminar el producto con código {cod}?")
-    if confirm:
-        # GUARDAMOS EL RESULTADO EN UNA VARIABLE
-        exito = service.delete_product_db(cod)
-        
-        if exito:
-            messagebox.showinfo("Éxito", "Producto eliminado correctamente.")
-            load_inventory()
-            clear_fields()
-        else:
-            messagebox.showerror("Error", "No se pudo eliminar el producto de la base de datos.")
 
 def load_product_data(event):
     selected = table.selection()
@@ -97,15 +133,15 @@ def clear_fields():
 
 def search_inventory(event=None):
     term = search_entry.get().strip()
-
-    table.delete(*table.get_children())
-
     if not term:
-        load_inventory()
-        return
-
-    for row in service.search_inventory(term):
-        table.insert("", tk.END, values=row)
+        return load_inventory()
+    try:
+        rows = service.search_inventory(term)
+    except Error as exc:
+        show_database_error(exc)
+        return False
+    replace_rows(rows)
+    return True
 
 # UI
 root = tk.Tk()
