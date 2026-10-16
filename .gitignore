@@ -1,0 +1,34 @@
+# Variables de entorno y configuración privada
+.env
+.env.*
+!.env.example
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Archivos generados al compilar
+build/
+dist/
+*.egg-info/
+
+# Facturas generadas
+invoices/
+factura_*.txt
+factura_*.pdf
+
+# Configuración del editor
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Archivos del sistema
+Thumbs.db
+.DS_Store
