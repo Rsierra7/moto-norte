@@ -2,17 +2,9 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
-# from matplotlib import table as plt_table
-from numpy import pad
-# from websockets import Data, Side
 from services import ventas_service as service
 import os
 import win32print
-# from datetime import datetime
-# from reportlab.lib.pagesizes import letter
-# from reportlab.lib.units import cm
-# from reportlab.pdfgen import canvas
-from reportlab.pdfbase.pdfmetrics import stringWidth
 from textwrap import wrap
 from tkcalendar import DateEntry
 
