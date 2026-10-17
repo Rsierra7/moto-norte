@@ -5,61 +5,44 @@ from tkcalendar import DateEntry
 from datetime import datetime
 
 # --- IMPORTACIONES DE TUS MÓDULOS ---
-from db import get_connection
+from mysql.connector import Error
+from services.database_support import database_message
+from services.reportes_service import get_sales_by_date
+
+report_valid = False
 from services.reportes_service import export_to_csv
 from utils.window_manager import center_window
 
 def generate_sales_report():
-    """Consulta la base de datos y llena la tabla visual."""
+    """Conserva el reporte visible si falla la consulta y bloquea su exportación."""
+    global report_valid
+    report_valid = False
     start_date = entry_start_date.get()
     end_date = entry_end_date.get()
-
-    if not start_date or not end_date:
-        messagebox.showwarning("Advertencia", "Por favor, seleccione ambas fechas.")
+    if not start_date or not end_date or start_date > end_date:
+        messagebox.showwarning("Fechas", "Seleccione un rango de fechas válido.", parent=root)
         return
-
-    connection = get_connection()
-    if not connection:
-        return
-
     try:
-        cursor = connection.cursor()
-        # Query optimizada para el reporte
-        query = """
-            SELECT num_factura, fecha_venta, producto, cantidad, precio_unitario, total, tipo_pago
-            FROM ventas
-            WHERE DATE(fecha_venta) BETWEEN %s AND %s
-            ORDER BY fecha_venta ASC
-        """
-        cursor.execute(query, (start_date, end_date))
-        rows = cursor.fetchall()
-
-        # Limpiar la tabla antes de insertar nuevos datos
-        report_table.delete(*report_table.get_children())
-
-        total_sales = 0
-        for row in rows:
-            # Formateamos los precios para la vista (separador de miles)
-            precio_f = f"{float(row[4]):,.0f}"
-            total_f = f"{float(row[5]):,.0f}"
-            
-            display_row = (row[0], row[1], row[2], row[3], precio_f, total_f, row[6])
-            report_table.insert("", tk.END, values=display_row)
-            
-            total_sales += float(row[5])
-
-        # Actualizar el label del total
-        total_label.config(text=f"Total en Rango: ${total_sales:,.0f}")
-        
-        if not rows:
-            messagebox.showinfo("Búsqueda", "No se encontraron registros en esas fechas.")
-
-    except Exception as e:
-        messagebox.showerror("Error de Consulta", f"Ocurrió un error: {e}")
-    finally:
-        connection.close()
+        rows = get_sales_by_date(start_date, end_date)
+    except Error as exc:
+        messagebox.showerror("Error de base de datos", database_message(exc), parent=root)
+        return
+    report_table.delete(*report_table.get_children())
+    total_sales = 0
+    for row in rows:
+        display_row = (row[0], row[1], row[2], row[3],
+                       f"{float(row[4]):,.0f}", f"{float(row[5]):,.0f}", row[6])
+        report_table.insert("", tk.END, values=display_row)
+        total_sales += float(row[5])
+    total_label.config(text=f"Total en Rango: ${total_sales:,.0f}")
+    report_valid = True
+    if not rows:
+        messagebox.showinfo("Búsqueda", "No se encontraron registros en esas fechas.", parent=root)
 
 def handle_export():
+    if not report_valid:
+        messagebox.showwarning("Exportar", "Genera el reporte correctamente antes de exportar.", parent=root)
+        return
     """Extrae los datos de la UI y los envía al servicio de exportación."""
     data = [report_table.item(row)["values"] for row in report_table.get_children()]
     
