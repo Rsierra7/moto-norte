@@ -1,27 +1,18 @@
-from logging import root
 import csv
-from datetime import datetime
 from tkinter import messagebox, filedialog
-from db import get_connection
+from services.database_support import read_cursor
+
 
 def get_sales_by_date(start, end):
-    conn = get_connection()
-    cursor = conn.cursor()
+    with read_cursor() as cursor:
+        cursor.execute(
+            """SELECT num_factura, fecha_venta, producto, cantidad,
+            precio_unitario, total, tipo_pago FROM ventas
+            WHERE DATE(fecha_venta) BETWEEN %s AND %s ORDER BY fecha_venta""",
+            (start, end),
+        )
+        return cursor.fetchall()
 
-    query = """
-    SELECT num_factura, fecha_venta, producto, cantidad, precio_unitario, total, tipo_pago
-    FROM ventas
-    WHERE DATE(fecha_venta) BETWEEN %s AND %s
-    ORDER BY fecha_venta
-    """
-
-    cursor.execute(query, (start, end))
-    data = cursor.fetchall()
-
-    cursor.close()
-    conn.close()
-
-    return data
 
 def export_to_csv(suggested_name, headers, data):
     file_path = filedialog.asksaveasfilename(

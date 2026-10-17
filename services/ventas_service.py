@@ -1,88 +1,68 @@
-from db import get_connection
 from datetime import datetime
+from mysql.connector import Error
+from db import get_connection
+from services.database_support import (
+    read_cursor, close_resources, database_message, SaleCommitUnknown,
+)
+
 
 def search_product(term):
-    conn = get_connection()
-    cursor = conn.cursor()
+    with read_cursor() as cursor:
+        term = f"%{term}%"
+        cursor.execute(
+            """SELECT CODIGO, PRODUCTO, PRECIO, CANTIDAD FROM inventario
+            WHERE PRODUCTO LIKE %s OR CODIGO LIKE %s""", (term, term)
+        )
+        return cursor.fetchall()
 
-    query = """
-    SELECT CODIGO, PRODUCTO, PRECIO, CANTIDAD
-    FROM inventario
-    WHERE PRODUCTO LIKE %s OR CODIGO LIKE %s
-    """
-
-    term = f"%{term}%"
-    cursor.execute(query, (term, term))
-
-    data = cursor.fetchall()
-
-    cursor.close()
-    conn.close()
-
-    return data
 
 def get_next_invoice():
-    conn = get_connection()
-    if conn is None:
-        return "MN000000000"
-    
-    cursor = conn.cursor()
+    with read_cursor() as cursor:
+        cursor.execute(
+            "SELECT MAX(CAST(SUBSTR(num_factura, 3) AS UNSIGNED)) + 1 FROM ventas"
+        )
+        result = cursor.fetchone()[0] or 1
+        return f"MN{result:010d}"
 
-    cursor.execute("SELECT MAX(CAST(SUBSTR(num_factura, 3) AS UNSIGNED)) + 1 FROM MotoNorte.ventas")
-    result = cursor.fetchone()[0]
-    if not result:
-            result = 1
-
-    next_invoice = result
-
-    cursor.close()
-    conn.close()
-
-    return f"MN{str(next_invoice).zfill(10)}"
 
 def register_sale(invoice, cart, payment_type, sale_date):
-    conn = get_connection()
-    if conn is None:
-        return False, "Could not connect to the database."
-    
-    cursor = conn.cursor()
+    conn = None
+    cursor = None
+    committing = False
     try:
-        for item in cart:
-            # item: (code, product, quantity, price, total)
-            code, product, quantity, price, total = item
-
-            # The query requires 8 values to match the 8 columns listed
-            query = """
-            INSERT INTO ventas (codigo_producto, num_factura, producto, cantidad, precio_unitario, total, tipo_pago, fecha_venta)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """
-            
-            cursor.execute(query, (
-                code,         # codigo_producto
-                invoice,      # num_factura
-                product,      # producto
-                quantity,     # cantidad
-                price,        # precio_unitario
-                total,        # total
-                payment_type, # tipo_pago
-                sale_date     # fecha_venta
-            ))
-
-            # Update inventory
-            cursor.execute("""
-                UPDATE inventario
-                SET cantidad = cantidad - %s
-                WHERE codigo = %s;
-            """, (quantity, code))
-
+        conn = get_connection()
+        cursor = conn.cursor()
+        for code, product, quantity, price, total in cart:
+            cursor.execute(
+                """INSERT INTO ventas
+                (codigo_producto, num_factura, producto, cantidad, precio_unitario,
+                 total, tipo_pago, fecha_venta)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                (code, invoice, product, quantity, price, total, payment_type, sale_date),
+            )
+            cursor.execute(
+                "UPDATE inventario SET cantidad = cantidad - %s WHERE codigo = %s",
+                (quantity, code),
+            )
+        committing = True
         conn.commit()
         return True, "Venta registrada exitosamente."
-    except Exception as e:
-        conn.rollback()
-        return False, str(e)
+    except Error as exc:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Error:
+                pass
+        if committing:
+            raise SaleCommitUnknown(
+                f"No se pudo confirmar el resultado de la factura {invoice}. "
+                "No repitas la venta. Revisa el reporte de ventas y el inventario "
+                "antes de volver a registrarla."
+            ) from exc
+        return False, database_message(exc)
     finally:
-        cursor.close()
-        conn.close()
+        close_resources(conn, cursor)
+
 
 def build_invoice_text(invoice, cart):
 
