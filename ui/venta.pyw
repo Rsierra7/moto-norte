@@ -388,8 +388,105 @@ def add_labour_item():
 
     entry_price.bind("<Return>", confirm_labour)
 
-def get_next_invoice():
-    return service.get_next_invoice()
+def handle_register_button():
+    global sale_uncertain
+
+    if sale_uncertain:
+        messagebox.showwarning(
+            "Verificar venta",
+            "Hay una venta pendiente de verificación. "
+            "Revisa el reporte y el inventario antes de "
+            "cerrar y volver a abrir Ventas.",
+            parent=root,
+        )
+        return
+
+    payment_type = payment_type_cb.get()
+    sale_date = entry_date.get()
+    cart_items = list(cart)
+
+    if not cart_items:
+        messagebox.showwarning(
+            "Advertencia",
+            "El carrito está vacío.",
+            parent=root,
+        )
+        return
+
+    if not payment_type:
+        messagebox.showwarning(
+            "Advertencia",
+            "Seleccione un tipo de pago.",
+            parent=root,
+        )
+        return
+
+    try:
+        success, message, invoice = service.register_sale(
+            cart_items,
+            payment_type,
+            sale_date,
+        )
+
+    except SaleCommitUnknown as exc:
+        sale_uncertain = True
+
+        messagebox.showerror(
+            "Verificar venta",
+            str(exc),
+            parent=root,
+        )
+        return
+
+    except Error as exc:
+        messagebox.showerror(
+            "Error de base de datos",
+            database_message(exc),
+            parent=root,
+        )
+        return
+
+    if not success:
+        messagebox.showerror(
+            "Error al registrar venta",
+            message,
+            parent=root,
+        )
+        return
+
+    # El commit ya fue confirmado.
+    # Limpiar antes de guardar o imprimir evita repetir la venta.
+    table_cart.delete(*table_cart.get_children())
+    cart.clear()
+    update_totals()
+
+    label_invoice.config(
+        text=f"N° Factura: {invoice}"
+    )
+
+    messagebox.showinfo(
+        "Éxito",
+        message,
+        parent=root,
+    )
+
+    try:
+        cuerpo_f = service.build_invoice_text(
+            invoice,
+            cart_items,
+        )
+
+        save_invoice_txt(invoice, cuerpo_f)
+
+        if messagebox.askyesno(
+            "Imprimir factura",
+            f"¿Desea imprimir la factura {invoice}?",
+            parent=root,
+        ):
+            print_invoice(invoice, cart_items)
+
+    finally:
+        reset_ui_and_data()
 
 def print_invoice(invoice, invoice_items):
     cuerpo = service.build_invoice_text(invoice, invoice_items)
@@ -433,83 +530,30 @@ def save_invoice_txt(invoice, cuerpo_factura):
     except Exception as e:
         messagebox.showerror("Error", "La venta ya está registrada, pero no se pudo guardar el archivo de la factura. Revisa la carpeta invoices, el espacio disponible y los permisos. No repitas la venta.")
 
-def handle_register_button():
-    global sale_uncertain
-    if sale_uncertain:
-        messagebox.showwarning(
-            "Verificar venta", "Hay una venta pendiente de verificación. "
-            "Revisa el reporte y el inventario antes de cerrar y volver a abrir Ventas.", parent=root)
-        return
-    payment_type = payment_type_cb.get()
-    sale_date = entry_date.get()
-    # Usar los importes originales, sin redondear los valores de la tabla visual.
-    cart_items = list(cart)
-    if not cart_items:
-        messagebox.showwarning("Advertencia", "El carrito está vacío.", parent=root)
-        return
-    if not payment_type:
-        messagebox.showwarning("Advertencia", "Seleccione un tipo de pago.", parent=root)
-        return
-    try:
-        invoice = get_next_invoice()
-        success, message = service.register_sale(invoice, cart_items, payment_type, sale_date)
-    except SaleCommitUnknown as exc:
-        sale_uncertain = True
-        messagebox.showerror("Verificar venta", str(exc), parent=root)
-        return
-    except Error as exc:
-        messagebox.showerror("Error de base de datos", database_message(exc), parent=root)
-        return
-    if not success:
-        messagebox.showerror("Error al registrar venta", message, parent=root)
-        return
-    # Ya está confirmada: limpiar el carrito antes de guardar o imprimir el respaldo.
-    table_cart.delete(*table_cart.get_children())
-    cart.clear()
-    update_totals()
-    messagebox.showinfo("Éxito", message, parent=root)
-    try:
-        cuerpo_f = service.build_invoice_text(invoice, cart_items)
-        save_invoice_txt(invoice, cuerpo_f)
-        if messagebox.askyesno("Imprimir factura", f"¿Desea imprimir la factura {invoice}?", parent=root):
-            print_invoice(invoice, cart_items)
-    finally:
-        reset_ui_and_data()
     
 def reset_ui_and_data():
-    # 1. Limpiar widgets
     table_cart.delete(*table_cart.get_children())
     table_products.delete(*table_products.get_children())
+
     entry_search.delete(0, tk.END)
     payment_type_cb.set("")
-    
-    # 2. Limpiar datos en memoria
-    # USAMOS 'cart' PORQUE ES LA QUE REVISA 'add_labour_item'
-    global cart
-    cart.clear() 
-    
-    # 3. Actualizar etiquetas y totales
-    update_totals() 
-    
-    # 4. Refrescar número de factura y labels
+
+    cart.clear()
+    update_totals()
+
     label_total.config(text="Total: $0")
-    try:
-        new_invoice = get_next_invoice()
-    except Error as exc:
-        new_invoice = "No disponible"
-        messagebox.showerror("Error de base de datos", database_message(exc), parent=root)
-    # Mantengo tu formato de espacios para el diseño de la etiqueta
+
     label_invoice.config(
-        text=f"N° Factura: {new_invoice}                                                                                          ", 
-        font=("Arial", 10, "bold"), 
-        bg="#2c3e50", 
-        fg="white"
-    )                                                                     
+        text="N° Factura: Se asignará al registrar",
+        font=("Arial", 10, "bold"),
+        bg="#2c3e50",
+        fg="white",
+    )                                                                    
 
 # =========================
 # UI
 # =========================
-invoice = "Pendiente"
+invoice = "Se asignará al registrar"
 
 root = tk.Tk()
 root.title("🧮 Ventas")
@@ -650,14 +694,4 @@ frame_actions.pack(pady=10)
 tk.Button(frame_actions, text="💾 Registrar Venta", command=handle_register_button, width=20, bg="#27ae60", fg="white").grid(row=0, column=0, padx=5)
 # tk.Button(frame_actions, text="🧾 Imprimir", command=print_invoice, width=20).grid(row=0, column=1, padx=5)
 
-def load_invoice_number():
-    try:
-        number = get_next_invoice()
-    except Error as exc:
-        label_invoice.config(text="N° Factura: No disponible")
-        messagebox.showerror("Error de base de datos", database_message(exc), parent=root)
-        return
-    label_invoice.config(text=f"N° Factura: {number}")
-
-root.after(0, load_invoice_number)
 root.mainloop()

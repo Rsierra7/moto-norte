@@ -1,126 +1,269 @@
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+
 from mysql.connector import Error
+
 from db import get_connection
 from services.database_support import (
-    read_cursor, close_resources, database_message, SaleCommitUnknown,
+    SaleCommitUnknown,
+    close_resources,
+    database_message,
+    read_cursor,
 )
-
-
-def search_product(term):
-    with read_cursor() as cursor:
-        term = f"%{term}%"
-        cursor.execute(
-            """SELECT CODIGO, PRODUCTO, PRECIO, CANTIDAD FROM inventario
-            WHERE PRODUCTO LIKE %s OR CODIGO LIKE %s""", (term, term)
-        )
-        return cursor.fetchall()
-
-
-def get_next_invoice():
-    with read_cursor() as cursor:
-        cursor.execute(
-            "SELECT MAX(CAST(SUBSTR(num_factura, 3) AS UNSIGNED)) + 1 FROM ventas"
-        )
-        result = cursor.fetchone()[0] or 1
-        return f"MN{result:010d}"
 
 
 LABOUR_CODE = "MO01"
 
 
 class SaleValidationError(ValueError):
-    """El carrito no se puede registrar con los datos o existencias actuales."""
+    """Los datos o las existencias no permiten registrar la venta."""
+
+
+def search_product(term):
+    with read_cursor() as cursor:
+        term = f"%{term}%"
+
+        cursor.execute(
+            """
+            SELECT CODIGO, PRODUCTO, PRECIO, CANTIDAD
+            FROM inventario
+            WHERE PRODUCTO LIKE %s OR CODIGO LIKE %s
+            """,
+            (term, term),
+        )
+
+        return cursor.fetchall()
 
 
 def _validated_cart(cart):
     if not cart:
         raise SaleValidationError("El carrito está vacío.")
+
     validated = []
+
     for code, product, quantity, price, total in cart:
         code = str(code).strip()
+
         if not code:
-            raise SaleValidationError("Hay un producto sin código.")
+            raise SaleValidationError(
+                "Hay un producto sin código."
+            )
+
         try:
             if isinstance(quantity, bool):
                 raise ValueError()
+
             number = Decimal(str(quantity))
-            if not number.is_finite() or number <= 0 or number != number.to_integral_value():
+
+            if (
+                not number.is_finite()
+                or number <= 0
+                or number != number.to_integral_value()
+            ):
                 raise ValueError()
+
             quantity = int(number)
+
         except (InvalidOperation, ValueError, OverflowError):
             raise SaleValidationError(
-                f"La cantidad de {product} ({code}) debe ser un entero mayor que cero."
+                f"La cantidad de {product} ({code}) debe ser "
+                "un entero mayor que cero."
             ) from None
-        # Normalizar la clave reservada de mano de obra.
+
         if code.upper() == LABOUR_CODE:
             code = LABOUR_CODE
-        validated.append((code, product, quantity, price, total))
+
+        validated.append(
+            (code, product, quantity, price, total)
+        )
+
     return validated
 
 
-def register_sale(invoice, cart, payment_type, sale_date):
+def _allocate_invoice(cursor):
+    """
+    Reserva el siguiente número dentro de la transacción.
+
+    El bloqueo permanece hasta confirmar o revertir toda la venta.
+    """
+    cursor.execute(
+        """
+        SELECT ultimo_numero
+        FROM numeracion_facturas
+        WHERE prefijo = %s
+        FOR UPDATE
+        """,
+        ("MN",),
+    )
+
+    row = cursor.fetchone()
+
+    if row is None:
+        raise SaleValidationError(
+            "Falta inicializar la numeración de facturas. "
+            "Ejecuta la actualización de la base de datos."
+        )
+
+    number = int(row[0]) + 1
+
+    if number > 9999999999:
+        raise SaleValidationError(
+            "Se agotó la numeración disponible para el prefijo MN."
+        )
+
+    cursor.execute(
+        """
+        UPDATE numeracion_facturas
+        SET ultimo_numero = %s
+        WHERE prefijo = %s
+        """,
+        (number, "MN"),
+    )
+
+    return f"MN{number:010d}"
+
+
+def register_sale(cart, payment_type, sale_date):
+    """
+    Devuelve:
+        (éxito, mensaje, número de factura)
+
+    La factura solo se devuelve cuando el commit fue confirmado.
+    """
     try:
         cart = _validated_cart(cart)
     except SaleValidationError as exc:
-        return False, str(exc)
+        return False, str(exc), None
+
     conn = None
     cursor = None
     committing = False
+    invoice = None
+
     try:
         conn = get_connection()
+        conn.start_transaction()
+
         cursor = conn.cursor()
+
+        # Reservar el número antes de guardar los productos.
+        invoice = _allocate_invoice(cursor)
+
         for code, product, quantity, price, total in cart:
             if code == LABOUR_CODE:
-                # ventas tiene una FK hacia inventario. Crear la referencia si falta,
-                # sin cambiar precio, ubicación ni existencias de un registro existente.
+                # Crear la referencia requerida por la clave foránea.
+                # Si ya existe, conservar sus datos y existencias.
                 cursor.execute(
-                    """INSERT INTO inventario
-                    (CODIGO, PRODUCTO, UBICACION, PRECIO, CANTIDAD, TOTAL)
+                    """
+                    INSERT INTO inventario (
+                        CODIGO,
+                        PRODUCTO,
+                        UBICACION,
+                        PRECIO,
+                        CANTIDAD,
+                        TOTAL
+                    )
                     VALUES (%s, %s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE CODIGO = CODIGO""",
-                    (LABOUR_CODE, "MANO DE OBRA", "SERVICIO", 0, 0, 0),
+                    ON DUPLICATE KEY UPDATE CODIGO = CODIGO
+                    """,
+                    (
+                        LABOUR_CODE,
+                        "MANO DE OBRA",
+                        "SERVICIO",
+                        0,
+                        0,
+                        0,
+                    ),
                 )
+
             else:
-                # Comprobar y descontar en una sola sentencia: evita vender stock
-                # que cambió desde que se agregó el producto al carrito.
+                # Comprobar y descontar en una sola operación.
                 cursor.execute(
-                    """UPDATE inventario SET CANTIDAD = CANTIDAD - %s
-                    WHERE CODIGO = %s AND CANTIDAD >= %s""",
+                    """
+                    UPDATE inventario
+                    SET CANTIDAD = CANTIDAD - %s
+                    WHERE CODIGO = %s
+                      AND CANTIDAD >= %s
+                    """,
                     (quantity, code, quantity),
                 )
+
                 if cursor.rowcount != 1:
                     raise SaleValidationError(
-                        f"Existencias insuficientes o producto inexistente: {product} ({code}). "
-                        f"Cantidad solicitada: {quantity}. No se registró la venta. "
+                        "Existencias insuficientes o producto "
+                        f"inexistente: {product} ({code}). "
+                        f"Cantidad solicitada: {quantity}. "
+                        "No se registró la venta. "
                         "Actualiza la búsqueda y revisa el carrito."
                     )
+
             cursor.execute(
-                """INSERT INTO ventas
-                (codigo_producto, num_factura, producto, cantidad, precio_unitario,
-                 total, tipo_pago, fecha_venta)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                (code, invoice, product, quantity, price, total, payment_type, sale_date),
+                """
+                INSERT INTO ventas (
+                    codigo_producto,
+                    num_factura,
+                    producto,
+                    cantidad,
+                    precio_unitario,
+                    total,
+                    tipo_pago,
+                    fecha_venta
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    code,
+                    invoice,
+                    product,
+                    quantity,
+                    price,
+                    total,
+                    payment_type,
+                    sale_date,
+                ),
             )
+
         committing = True
         conn.commit()
-        return True, "Venta registrada exitosamente."
+
+        return (
+            True,
+            f"Venta registrada exitosamente. Factura: {invoice}.",
+            invoice,
+        )
+
     except (Error, SaleValidationError) as exc:
         if conn is not None:
             try:
                 conn.rollback()
             except Error:
                 pass
+
         if committing:
             raise SaleCommitUnknown(
-                f"No se pudo confirmar el resultado de la factura {invoice}. "
-                "No repitas la venta. Revisa el reporte de ventas y el inventario "
+                "No se pudo confirmar el resultado de la factura "
+                f"{invoice}. No repitas la venta. "
+                "Revisa el reporte de ventas y el inventario "
                 "antes de volver a registrarla."
             ) from exc
-        return False, str(exc) if isinstance(exc, SaleValidationError) else database_message(exc)
+
+        if isinstance(exc, SaleValidationError):
+            message = str(exc)
+
+        elif getattr(exc, "errno", None) == 1146:
+            message = (
+                "Falta una tabla necesaria. "
+                "Revisa la estructura de la base de datos "
+                "y ejecuta la actualización de numeración."
+            )
+
+        else:
+            message = database_message(exc)
+
+        return False, message, None
+
     finally:
         close_resources(conn, cursor)
-
 
 def build_invoice_text(invoice, cart):
 
