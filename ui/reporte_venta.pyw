@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from utils import dialogos as messagebox
 from tkcalendar import DateEntry
 from datetime import datetime
 
@@ -70,11 +71,11 @@ filter_frame.configure(bg="#34495e", fg="white")
 filter_frame.pack(fill="x", padx=20, pady=10)
 
 tk.Label(filter_frame, text="Desde:", fg="white", bg="#34495e").grid(row=0, column=0, padx=5)
-entry_start_date = DateEntry(filter_frame, date_pattern='yyyy-MM-dd', width=12, background='darkblue', foreground='white')
+entry_start_date = DateEntry(filter_frame, locale="es_CO", date_pattern='yyyy-MM-dd', width=12, background='darkblue', foreground='white')
 entry_start_date.grid(row=0, column=1, padx=5)
 
 tk.Label(filter_frame, text="Hasta:", fg="white", bg="#34495e").grid(row=0, column=2, padx=5)
-entry_end_date = DateEntry(filter_frame, date_pattern='yyyy-MM-dd', width=12, background='darkblue', foreground='white')
+entry_end_date = DateEntry(filter_frame, locale="es_CO", date_pattern='yyyy-MM-dd', width=12, background='darkblue', foreground='white')
 entry_end_date.grid(row=0, column=3, padx=5)
 
 btn_buscar = tk.Button(filter_frame, text="🔍 Generar Reporte", command=generate_sales_report, 

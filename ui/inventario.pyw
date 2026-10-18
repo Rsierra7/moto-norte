@@ -1,5 +1,6 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from utils import dialogos as messagebox
 from mysql.connector import Error
 from db import DatabaseConnectionError
 from services import inventario_service as service
