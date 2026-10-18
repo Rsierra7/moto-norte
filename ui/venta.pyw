@@ -1,6 +1,8 @@
 # from sqlite3 import Date
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk
+from utils import dialogos as messagebox
+from utils import dialogos as simpledialog
 
 from services import ventas_service as service
 from mysql.connector import Error
@@ -35,7 +37,7 @@ def search_product(event=None):
         return
     table_products.delete(*table_products.get_children())
     if not data:
-        messagebox.showinfo("Info", "No se encontraron productos", parent=root)
+        messagebox.showinfo("Información", "No se encontraron productos", parent=root)
     for row in data:
         table_products.insert("", tk.END, values=row)
 
@@ -65,7 +67,7 @@ def add_to_cart(event=None):
             total_qty = qty + new_qty
 
             if total_qty > int(available_quantity):
-                messagebox.showwarning("Stock", "No hay suficiente inventario.")
+                messagebox.showwarning("Existencias", "No hay suficiente inventario.")
                 return
 
             subtotal = total_qty * float(item_price)
@@ -119,7 +121,7 @@ def get_quantity(producto, stock_disponible):
             continue
 
         if qty > int(stock_disponible):
-            messagebox.showwarning("Stock", "No hay suficiente inventario.")
+            messagebox.showwarning("Existencias", "No hay suficiente inventario.")
             continue
 
         return qty
@@ -135,21 +137,6 @@ def edit_cart_item(event=None):
     # Limpiar valores
     old_qty = int(str(old_qty).replace(",", ""))
     price = float(str(price).replace(",", ""))
-
-    # 🔹 Obtener stock real
-    try:
-        resultados = service.search_product(code)
-    except Error as exc:
-        messagebox.showerror("Error de base de datos", database_message(exc), parent=root)
-        return
-    if not resultados:
-        messagebox.showerror("Error", "No se encontró el producto.")
-        return
-
-    try:
-        stock_real = int(resultados[0][4])
-    except IndexError:
-        stock_real = int(resultados[0][-1])
 
     # 🔹 Función para actualizar
     def update_item(new_qty, new_price):
@@ -188,7 +175,7 @@ def edit_cart_item(event=None):
 
                 if max_value is not None and num > max_value:
                     messagebox.showwarning(
-                        "Stock insuficiente",
+                        "Existencias insuficientes",
                         f"No puedes ingresar más de {max_value} unidades.",
                         parent=parent
                     )
@@ -220,6 +207,22 @@ def edit_cart_item(event=None):
         update_item(old_qty, new_price)
         return
 
+    # 🔹 Obtener stock real
+    try:
+        resultados = service.search_product(code)
+    except Error as exc:
+        messagebox.showerror("Error de base de datos", database_message(exc), parent=root)
+        return
+    if not resultados:
+        messagebox.showerror("Error", "No se encontró el producto.")
+        return
+
+    exact_product = next((row for row in resultados if str(row[0]) == str(code)), None)
+    if exact_product is None:
+        messagebox.showerror("Error", "No se encontró el producto.", parent=root)
+        return
+    stock_real = int(exact_product[3])
+
     # 🔹 Ventana
     win = tk.Toplevel()
     win.title("Editar producto")
@@ -227,7 +230,7 @@ def edit_cart_item(event=None):
     win.resizable(False, False)
 
     tk.Label(win, text=f"Editar: {product}", font=("Arial", 11, "bold")).pack(pady=10)
-    tk.Label(win, text=f"Stock disponible: {stock_real}", fg="gray").pack()
+    tk.Label(win, text=f"Existencias disponibles: {stock_real}", fg="gray").pack()
 
     # 🔹 Editar cantidad
     def edit_qty():
@@ -428,7 +431,7 @@ def save_invoice_txt(invoice, cuerpo_factura):
             f.write(cuerpo_factura)
 
     except Exception as e:
-        messagebox.showerror("Error", f"No se pudo guardar la factura:\n{e}")
+        messagebox.showerror("Error", "La venta ya está registrada, pero no se pudo guardar el archivo de la factura. Revisa la carpeta invoices, el espacio disponible y los permisos. No repitas la venta.")
 
 def handle_register_button():
     global sale_uncertain
@@ -564,7 +567,7 @@ scrollbar.pack(side="right", fill="y")
 
 
 for col in ("CODIGO", "PRODUCTO", "PRECIO", "STOCK"):
-    table_products.heading(col, text=col, command=lambda _col=col: sort_column(table_products, _col, False))
+    table_products.heading(col, text={"CODIGO": "Código", "PRODUCTO": "Producto", "PRECIO": "Precio", "STOCK": "Existencias"}[col], command=lambda _col=col: sort_column(table_products, _col, False))
 
 table_products.bind("<Double-1>", add_to_cart)
 
@@ -603,7 +606,7 @@ table_cart.pack(side="left", fill="both", expand=True)
 scrollbar_cart.pack(side="right", fill="y")
 
 for col in ("CODIGO", "PRODUCTO", "CANTIDAD", "PRECIO", "TOTAL"):
-    table_cart.heading(col, text=col, command=lambda _col=col: sort_column(table_cart, _col, False))
+    table_cart.heading(col, text={"CODIGO": "Código", "PRODUCTO": "Producto", "CANTIDAD": "Cantidad", "PRECIO": "Precio", "TOTAL": "Total"}[col], command=lambda _col=col: sort_column(table_cart, _col, False))
 
 # double click para editar cantidad
 table_cart.bind("<Double-1>", edit_cart_item)
@@ -618,14 +621,14 @@ frame_buttons.columnconfigure(4, weight=1) # Empuja desde la derecha de los boto
 
 # 2. Botones (Columnas 1, 2, 3 para que estén juntos)
 tk.Button(frame_buttons, text="  Borrar todo  ", command=lambda: [cart.clear(), table_cart.delete(*table_cart.get_children()), update_totals()], bg="#27ae60", fg="white").grid(row=0, column=0, padx=20)
-tk.Button(frame_buttons, text="Eliminar Item", command=remove_from_cart, bg="#27ae60", fg="white").grid(row=0, column=1, padx=10)
+tk.Button(frame_buttons, text="Eliminar producto", command=remove_from_cart, bg="#27ae60", fg="white").grid(row=0, column=1, padx=10)
 tk.Button(frame_buttons, text="  Editar  ", command=edit_cart_item, bg="#27ae60", fg="white").grid(row=0, column=2, padx=10)
 tk.Button(frame_buttons, text="Mano de Obra", command=add_labour_item, bg="#27ae60", fg="white").grid(row=0, column=3, padx=10)
 
 
 # 3. Fecha (Columnas 5 y 6)
 tk.Label(frame_buttons, text="Fecha de Venta:", bg="#2c3e50", fg="white").grid(row=0, column=5, pady=10, sticky="e")
-entry_date = DateEntry(frame_buttons, date_pattern="yyyy-MM-dd")
+entry_date = DateEntry(frame_buttons, locale="es_CO", date_pattern="yyyy-MM-dd")
 entry_date.grid(row=0, column=6, padx=5, sticky="e")
 
 tk.Label(frame_buttons, text="Tipo de Pago:", bg="#2c3e50", fg="white").grid(row=3, column=5, padx=5, pady=5, sticky="e")

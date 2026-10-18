@@ -1,6 +1,6 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
-from tkinter.filedialog import asksaveasfilename
+from tkinter import ttk
+from utils import dialogos as messagebox
 # import csv
 from datetime import datetime
 from services import inventario_service as service

@@ -1,5 +1,6 @@
 import csv
-from tkinter import messagebox, filedialog
+from utils import dialogos as messagebox
+from utils.dialogos import asksavecsv
 from services.database_support import read_cursor
 
 
@@ -15,11 +16,7 @@ def get_sales_by_date(start, end):
 
 
 def export_to_csv(suggested_name, headers, data):
-    file_path = filedialog.asksaveasfilename(
-        defaultextension=".csv",
-        initialfile=suggested_name,
-        filetypes=[("CSV files", "*.csv")]
-    )
+    file_path = asksavecsv(suggested_name)
 
     if not file_path:
         return False
@@ -33,5 +30,5 @@ def export_to_csv(suggested_name, headers, data):
         messagebox.showinfo("Éxito", "Reporte exportado correctamente")
         return True
     except Exception as e:
-        messagebox.showerror("Error", f"No se pudo exportar: {str(e)}")
+        messagebox.showerror("Error", "No se pudo guardar el reporte. Revisa la carpeta de destino, los permisos y si el archivo está abierto en otro programa.")
         return False

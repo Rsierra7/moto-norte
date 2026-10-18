@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from mysql.connector import Error
 from db import get_connection
 from services.database_support import (
@@ -25,7 +26,44 @@ def get_next_invoice():
         return f"MN{result:010d}"
 
 
+LABOUR_CODE = "MO01"
+
+
+class SaleValidationError(ValueError):
+    """El carrito no se puede registrar con los datos o existencias actuales."""
+
+
+def _validated_cart(cart):
+    if not cart:
+        raise SaleValidationError("El carrito está vacío.")
+    validated = []
+    for code, product, quantity, price, total in cart:
+        code = str(code).strip()
+        if not code:
+            raise SaleValidationError("Hay un producto sin código.")
+        try:
+            if isinstance(quantity, bool):
+                raise ValueError()
+            number = Decimal(str(quantity))
+            if not number.is_finite() or number <= 0 or number != number.to_integral_value():
+                raise ValueError()
+            quantity = int(number)
+        except (InvalidOperation, ValueError, OverflowError):
+            raise SaleValidationError(
+                f"La cantidad de {product} ({code}) debe ser un entero mayor que cero."
+            ) from None
+        # Normalizar la clave reservada de mano de obra.
+        if code.upper() == LABOUR_CODE:
+            code = LABOUR_CODE
+        validated.append((code, product, quantity, price, total))
+    return validated
+
+
 def register_sale(invoice, cart, payment_type, sale_date):
+    try:
+        cart = _validated_cart(cart)
+    except SaleValidationError as exc:
+        return False, str(exc)
     conn = None
     cursor = None
     committing = False
@@ -33,6 +71,30 @@ def register_sale(invoice, cart, payment_type, sale_date):
         conn = get_connection()
         cursor = conn.cursor()
         for code, product, quantity, price, total in cart:
+            if code == LABOUR_CODE:
+                # ventas tiene una FK hacia inventario. Crear la referencia si falta,
+                # sin cambiar precio, ubicación ni existencias de un registro existente.
+                cursor.execute(
+                    """INSERT INTO inventario
+                    (CODIGO, PRODUCTO, UBICACION, PRECIO, CANTIDAD, TOTAL)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE CODIGO = CODIGO""",
+                    (LABOUR_CODE, "MANO DE OBRA", "SERVICIO", 0, 0, 0),
+                )
+            else:
+                # Comprobar y descontar en una sola sentencia: evita vender stock
+                # que cambió desde que se agregó el producto al carrito.
+                cursor.execute(
+                    """UPDATE inventario SET CANTIDAD = CANTIDAD - %s
+                    WHERE CODIGO = %s AND CANTIDAD >= %s""",
+                    (quantity, code, quantity),
+                )
+                if cursor.rowcount != 1:
+                    raise SaleValidationError(
+                        f"Existencias insuficientes o producto inexistente: {product} ({code}). "
+                        f"Cantidad solicitada: {quantity}. No se registró la venta. "
+                        "Actualiza la búsqueda y revisa el carrito."
+                    )
             cursor.execute(
                 """INSERT INTO ventas
                 (codigo_producto, num_factura, producto, cantidad, precio_unitario,
@@ -40,14 +102,10 @@ def register_sale(invoice, cart, payment_type, sale_date):
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
                 (code, invoice, product, quantity, price, total, payment_type, sale_date),
             )
-            cursor.execute(
-                "UPDATE inventario SET cantidad = cantidad - %s WHERE codigo = %s",
-                (quantity, code),
-            )
         committing = True
         conn.commit()
         return True, "Venta registrada exitosamente."
-    except Error as exc:
+    except (Error, SaleValidationError) as exc:
         if conn is not None:
             try:
                 conn.rollback()
@@ -59,7 +117,7 @@ def register_sale(invoice, cart, payment_type, sale_date):
                 "No repitas la venta. Revisa el reporte de ventas y el inventario "
                 "antes de volver a registrarla."
             ) from exc
-        return False, database_message(exc)
+        return False, str(exc) if isinstance(exc, SaleValidationError) else database_message(exc)
     finally:
         close_resources(conn, cursor)
 
